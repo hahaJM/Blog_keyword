@@ -321,6 +321,24 @@ API_KEY = os.getenv("NAVER_ACCESS_LICENSE")
 SECRET_KEY = os.getenv("NAVER_SECRET_KEY")
 CUSTOMER_ID = os.getenv("NAVER_CUSTOMER_ID")
 
+# Streamlit Cloud에서는 Secrets 사용
+if hasattr(st, "secrets"):
+
+    API_KEY = st.secrets.get(
+        "NAVER_ACCESS_LICENSE",
+        API_KEY
+    )
+
+    SECRET_KEY = st.secrets.get(
+        "NAVER_SECRET_KEY",
+        SECRET_KEY
+    )
+
+    CUSTOMER_ID = st.secrets.get(
+        "NAVER_CUSTOMER_ID",
+        CUSTOMER_ID
+    )
+
 BASE_URL = "https://api.searchad.naver.com"
 
 
@@ -458,6 +476,8 @@ def get_keyword_data(keyword):
 
     path = "/keywordstool"
     method = "GET"
+
+    keyword = keyword.strip()
 
     params = {
         "hintKeywords": keyword,
