@@ -6,12 +6,78 @@ import base64
 import requests
 import sqlite3
 import pandas as pd
+import streamlit.components.v1 as components
+from openai import OpenAI
 from bs4 import BeautifulSoup
-from st_aggrid import AgGrid, GridOptionsBuilder
+from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
+from urllib.parse import quote
+from google import genai
+SERPAPI_KEY = os.getenv("SERPAPI_KEY")
+from PIL import Image, ImageEnhance
+from io import BytesIO
+import zipfile
 
 def get_blog_position(keyword):
 
     url = "https://m.search.naver.com/search.naver"
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+            "Version/17.0 Mobile/15E148 Safari/604.1"
+        )
+    }
+
+    params = {
+        "query": keyword
+    }
+
+    try:
+        response = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=10
+        )
+
+        if response.status_code != 200:
+            return []
+
+        soup = BeautifulSoup(response.text, "html.parser")
+
+        titles = []
+
+        # 네이버 검색 결과에서 블로그 링크를 찾는다.
+        for link in soup.find_all("a", href=True):
+
+            href = link.get("href", "")
+            text = link.get_text(" ", strip=True)
+
+            if not text:
+                continue
+
+            # 네이버 블로그 링크만 대상으로 한다.
+            if "blog.naver.com" not in href:
+                continue
+
+            # 너무 짧거나 긴 텍스트는 제외
+            if len(text) < 5 or len(text) > 150:
+                continue
+
+            # 중복 제목 제거
+            if text not in titles:
+                titles.append(text)
+
+            # 우선 10개까지만
+            if len(titles) >= 10:
+                break
+
+        return titles
+
+    except Exception as e:
+        print("네이버 블로그 제목 수집 오류:", e)
+        return []
 
     params = {
         "query": keyword
@@ -321,23 +387,24 @@ API_KEY = os.getenv("NAVER_ACCESS_LICENSE")
 SECRET_KEY = os.getenv("NAVER_SECRET_KEY")
 CUSTOMER_ID = os.getenv("NAVER_CUSTOMER_ID")
 
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
 # Streamlit Cloud에서는 Secrets 사용
-if hasattr(st, "secrets"):
+try:
 
-    API_KEY = st.secrets.get(
-        "NAVER_ACCESS_LICENSE",
-        API_KEY
-    )
+    if "NAVER_ACCESS_LICENSE" in st.secrets:
+        API_KEY = st.secrets["NAVER_ACCESS_LICENSE"]
 
-    SECRET_KEY = st.secrets.get(
-        "NAVER_SECRET_KEY",
-        SECRET_KEY
-    )
+    if "NAVER_SECRET_KEY" in st.secrets:
+        SECRET_KEY = st.secrets["NAVER_SECRET_KEY"]
 
-    CUSTOMER_ID = st.secrets.get(
-        "NAVER_CUSTOMER_ID",
-        CUSTOMER_ID
-    )
+    if "NAVER_CUSTOMER_ID" in st.secrets:
+        CUSTOMER_ID = st.secrets["NAVER_CUSTOMER_ID"]
+
+except Exception:
+
+    pass
 
 BASE_URL = "https://api.searchad.naver.com"
 
@@ -450,6 +517,136 @@ def get_blog_position(keyword):
                 }
 
     return None
+
+# =========================
+# 네이버 모바일 블로그 제목 수집
+# =========================
+
+def get_naver_blog_titles(keyword):
+
+    url = "https://m.search.naver.com/search.naver"
+
+    params = {
+        "query": keyword
+    }
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) "
+            "AppleWebKit/605.1.15 (KHTML, like Gecko) "
+            "Version/18.0 Mobile/15E148 Safari/604.1"
+        )
+    }
+
+    try:
+
+        response = requests.get(
+            url,
+            params=params,
+            headers=headers,
+            timeout=10
+        )
+
+        if response.status_code != 200:
+            return []
+
+        soup = BeautifulSoup(
+            response.text,
+            "html.parser"
+        )
+
+        titles = []
+
+        # 네이버 검색 결과 블록
+        blocks = soup.select("[data-block-id]")
+
+        for block in blocks:
+
+            block_id = block.get("data-block-id")
+
+            if not block_id:
+                continue
+
+            # 블로그 영역 또는 웹 영역만 확인
+            if (
+                block_id != "review/prs_template_v2_review_blog_rra_mo.ts"
+                and block_id != "web/prs_template_v2_web_basic_mo.ts"
+            ):
+                continue
+
+            # 블로그 링크 찾기
+            blog_links = block.select(
+                "a[href*='blog.naver.com']"
+            )
+
+            for link in blog_links:
+
+                # 제목 후보를 찾는다
+                candidates = []
+
+                # 링크 내부의 제목처럼 보이는 요소
+                for tag in link.find_all(
+                    ["strong", "span", "p", "div"]
+                ):
+
+                    text = tag.get_text(
+                        " ",
+                        strip=True
+                    )
+
+                    if text:
+                        candidates.append(text)
+
+                # 후보가 없으면 링크 전체 텍스트 사용
+                if not candidates:
+                    candidates.append(
+                        link.get_text(
+                            " ",
+                            strip=True
+                        )
+                    )
+
+                # 가장 적절한 제목 후보 선택
+                title = None
+
+                for candidate in candidates:
+
+                    # 너무 짧은 텍스트 제외
+                    if len(candidate) < 8:
+                        continue
+
+                    # 본문처럼 너무 긴 텍스트 제외
+                    if len(candidate) > 100:
+                        continue
+
+                    # 해시태그 위주의 텍스트 제외
+                    if candidate.startswith("#"):
+                        continue
+
+                    title = candidate
+                    break
+
+                if not title:
+                    continue
+
+                # 중복 제거
+                if title not in titles:
+                    titles.append(title)
+
+                # 10개 수집
+                if len(titles) >= 10:
+                    return titles[:10]
+
+        return titles[:10]
+
+    except Exception as e:
+
+        print(
+            "네이버 블로그 제목 수집 오류:",
+            e
+        )
+
+        return []
 
 # =========================
 # 네이버 API 인증
@@ -570,16 +767,19 @@ st.divider()
 
 st.header("🔍 키워드 분석")
 
-keyword = st.text_input(
-    "검색할 키워드를 입력하세요",
-    placeholder="예: 심근경색"
-)
+with st.form("keyword_analysis_form"):
 
+    keyword = st.text_input(
+        "검색할 키워드를 입력하세요",
+        placeholder="예: 심근경색"
+    )
 
-if st.button(
-    "키워드 분석",
-    type="primary"
-):
+    analyze_button = st.form_submit_button(
+        "키워드 분석",
+        type="primary"
+    )
+
+if analyze_button:
 
     if not keyword.strip():
 
@@ -683,7 +883,7 @@ if st.button(
                 # 모바일 네이버 블로그 노출 위치 분석
                 # =========================
 
-                for row in rows[:20]:
+                for row in rows[:5]:
 
                     blog_result = get_blog_position(
                         row["키워드"]
@@ -701,7 +901,7 @@ if st.button(
 
 
                 # 나머지 키워드는 아직 조회하지 않음
-                for row in rows[20:]:
+                for row in rows[5:]:
 
                     row["블로그 노출 위치"] = None
                     row["블로그 노출 형태"] = "미조회"
@@ -802,7 +1002,281 @@ if st.session_state.keyword_rows:
         else:
             col5.write("-")
 
-    
+
+# =========================
+# 저장된 키워드 전체 업데이트
+# =========================
+
+def update_all_keywords():
+
+    keywords = load_saved_keywords()
+
+    if not keywords:
+
+        st.warning(
+            "업데이트할 키워드가 없습니다."
+        )
+
+        return
+
+    updated_count = 0
+
+    progress_bar = st.progress(0)
+
+    status_text = st.empty()
+
+    total = len(keywords)
+
+    for index, item in enumerate(keywords):
+
+        keyword = item["키워드"]
+
+        status_text.write(
+            f"🔄 업데이트 중: {keyword}"
+        )
+
+        # 네이버 검색량 가져오기
+        data = get_keyword_data(keyword)
+
+        if data:
+
+            keyword_data = None
+
+            for result in data.get(
+                "keywordList",
+                []
+            ):
+
+                if result.get(
+                    "relKeyword"
+                ) == keyword:
+
+                    pc_volume = result.get(
+                        "monthlyPcQcCnt",
+                        0
+                    )
+
+                    mobile_volume = result.get(
+                        "monthlyMobileQcCnt",
+                        0
+                    )
+
+                    try:
+                        pc_volume = int(
+                            pc_volume
+                        )
+                    except:
+                        pc_volume = 0
+
+                    try:
+                        mobile_volume = int(
+                            mobile_volume
+                        )
+                    except:
+                        mobile_volume = 0
+
+                    keyword_data = {
+
+                        "키워드": keyword,
+
+                        "월간 검색량":
+                            pc_volume + mobile_volume,
+
+                        "PC 검색량":
+                            pc_volume,
+
+                        "모바일 검색량":
+                            mobile_volume,
+
+                        "경쟁도":
+                            result.get(
+                                "compIdx",
+                                ""
+                            ),
+
+                        "PC 클릭률":
+                            result.get(
+                                "monthlyAvePcCtr",
+                                0
+                            ),
+
+                        "모바일 클릭률":
+                            result.get(
+                                "monthlyAveMobileCtr",
+                                0
+                            )
+                    }
+
+                    break
+
+            # 검색량 데이터를 찾았다면 저장
+            if keyword_data:
+
+                # 블로그 노출 위치 다시 확인
+                blog_result = get_blog_position(
+                    keyword
+                )
+
+                if blog_result:
+
+                    keyword_data[
+                        "블로그 노출 위치"
+                    ] = blog_result["위치"]
+
+                else:
+
+                    keyword_data[
+                        "블로그 노출 위치"
+                    ] = None
+
+                # 최신 데이터 저장
+                save_keyword(
+                    keyword_data
+                )
+
+                # 검색량 기록
+                save_keyword_history(
+                    keyword,
+                    keyword_data[
+                        "월간 검색량"
+                    ]
+                )
+
+                updated_count += 1
+
+        # 진행률
+        progress_bar.progress(
+            (index + 1) / total
+        )
+
+        # 너무 빠르게 요청하지 않도록 잠시 대기
+        time.sleep(0.3)
+
+    status_text.success(
+        f"✅ {updated_count}개 키워드 업데이트 완료!"
+    )
+
+    # 화면에 최신 데이터 반영
+    st.session_state.saved_keywords = (
+        load_saved_keywords()
+    )
+
+
+# =========================
+# 키워드 삭제
+# =========================
+
+def delete_keywords(keywords):
+
+    conn = sqlite3.connect(DB_NAME)
+
+    cursor = conn.cursor()
+
+    for keyword in keywords:
+
+        cursor.execute(
+            """
+            DELETE FROM saved_keywords
+            WHERE keyword = ?
+            """,
+            (keyword,)
+        )
+
+        cursor.execute(
+            """
+            DELETE FROM keyword_history
+            WHERE keyword = ?
+            """,
+            (keyword,)
+        )
+
+    conn.commit()
+
+    conn.close()
+
+
+# =========================
+# 키워드 상세 팝업
+# =========================
+
+@st.dialog("📊 키워드 상세", width="large")
+def show_keyword_detail(selected_keyword):
+
+    st.subheader(selected_keyword)
+
+    # =========================
+    # 검색량 추이
+    # =========================
+
+    history = load_keyword_history(
+        selected_keyword
+    )
+
+    if history:
+
+        st.write("### 📈 검색량 추이")
+
+        history_data = []
+
+        for item in history:
+
+            history_data.append({
+                "날짜": item["날짜"],
+                "검색량": item["검색량"]
+            })
+
+        history_df = pd.DataFrame(
+            history_data
+        )
+
+        st.line_chart(
+            history_df,
+            x="날짜",
+            y="검색량"
+        )
+
+    else:
+
+        st.info(
+            "아직 검색량 기록이 없습니다."
+        )
+
+    # =========================
+    # 네이버 모바일 검색
+    # =========================
+
+    st.write("### 📱 네이버 모바일 검색")
+
+    encoded_keyword = quote(
+        selected_keyword
+    )
+
+    naver_url = (
+        "https://m.search.naver.com/search.naver"
+        "?query="
+        + encoded_keyword
+    )
+
+    st.link_button(
+        "📱 네이버 모바일 검색 열기",
+        naver_url,
+        use_container_width=True
+    )
+
+# =========================
+# 키워드 상세 페이지 열기
+# =========================
+
+if "keyword_detail" in st.query_params:
+
+    selected_keyword = st.query_params[
+        "keyword_detail"
+    ]
+
+    show_keyword_detail(
+        selected_keyword
+    )
+
 # =========================
 # 내 키워드
 # =========================
@@ -826,20 +1300,79 @@ if st.session_state.saved_keywords:
             )
         })
 
+    df_keywords = pd.DataFrame(
+        display_saved_keywords
+    )
+    df_keywords["clickedKeyword"] = ""
+    df_keywords["clickedAt"] = 0
+
+    # =========================
+    # 버튼
+    # =========================
+
+    button1, button2 = st.columns([1, 1])
+
+    with button1:
+
+        delete_button = st.button(
+            "🗑️ 선택 삭제",
+            use_container_width=True
+        )
+
+    with button2:
+
+        update_button = st.button(
+            "🔄 전체 업데이트",
+            use_container_width=True
+        )
+
+    # =========================
+    # 키워드 클릭용 렌더러
+    # =========================
+
+    keyword_renderer = JsCode("""
+    class KeywordRenderer {
+
+        init(params) {
+
+            this.eGui = document.createElement("a");
+
+            this.eGui.textContent = params.value;
+
+            this.eGui.style.color = "#1a73e8";
+            this.eGui.style.textDecoration = "underline";
+            this.eGui.style.cursor = "pointer";
+
+            this.eGui.onclick = function(event) {
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                params.node.setDataValue(
+                    "clickedKeyword",
+                    params.value
+                );
+
+                params.node.setDataValue(
+                    "clickedAt",
+                    Date.now()
+                );
+            };
+        }
+
+        getGui() {
+
+            return this.eGui;
+        }
+    }
+    """)
+    
     # =========================
     # Excel 스타일 표 설정
     # =========================
 
-    st.markdown("""
-    <style>
-    .center-header .ag-header-cell-label {
-        justify-content: center !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-
     gb = GridOptionsBuilder.from_dataframe(
-        pd.DataFrame(display_saved_keywords)
+        df_keywords
     )
 
     gb.configure_default_column(
@@ -854,7 +1387,10 @@ if st.session_state.saved_keywords:
     gb.configure_column(
         "키워드",
         filter="agTextColumnFilter",
-        headerClass="center-header"
+        headerClass="center-header",
+        cellRenderer=keyword_renderer,
+        checkboxSelection=True,
+        headerCheckboxSelection=True
     )
 
     gb.configure_column(
@@ -881,29 +1417,113 @@ if st.session_state.saved_keywords:
         headerClass="center-header"
     )
 
-    # 행 선택
     gb.configure_selection(
-        selection_mode="single",
-        use_checkbox=False
+        selection_mode="multiple",
+        use_checkbox=True,
+        suppressRowClickSelection=True
+    )
+
+    # 내부용 클릭 데이터
+    gb.configure_column(
+        "clickedKeyword",
+        hide=True,
+        suppressColumnsToolPanel=True
+    )
+
+    gb.configure_column(
+        "clickedAt",
+        hide=True,
+        suppressColumnsToolPanel=True
     )
 
     grid_options = gb.build()
+
+    # =========================
+    # 헤더 가운데 정렬
+    # =========================
+
+    st.markdown("""
+    <style>
+    .center-header .ag-header-cell-label {
+        justify-content: center !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
     # =========================
     # 표 표시
     # =========================
 
     grid_response = AgGrid(
-        pd.DataFrame(display_saved_keywords),
+        df_keywords,
         gridOptions=grid_options,
         height=400,
         width="100%",
         fit_columns_on_grid_load=True,
-        allow_unsafe_jscode=False
+        allow_unsafe_jscode=True,
+        update_on=[
+            "selectionChanged",
+            "cellValueChanged"
+        ]
     )
 
     # =========================
-    # 키워드 선택
+    # 키워드 클릭 감지
+    # =========================
+
+    clicked_data = grid_response.get("data")
+
+    if clicked_data is not None:
+
+        clicked_df = pd.DataFrame(
+            clicked_data
+        )
+
+        if (
+            "clickedKeyword" in clicked_df.columns
+            and "clickedAt" in clicked_df.columns
+        ):
+
+            clicked_rows = clicked_df[
+                clicked_df["clickedAt"] > 0
+            ]
+
+            if not clicked_rows.empty:
+
+                clicked_row = clicked_rows.iloc[
+                    clicked_rows["clickedAt"].argmax()
+                ]
+
+                clicked_keyword = clicked_row[
+                    "clickedKeyword"
+                ]
+
+                clicked_time = clicked_row[
+                    "clickedAt"
+                ]
+
+                if (
+                    "last_clicked_time"
+                    not in st.session_state
+                ):
+
+                    st.session_state.last_clicked_time = 0
+
+                if (
+                    clicked_time
+                    > st.session_state.last_clicked_time
+                ):
+
+                    st.session_state.last_clicked_time = (
+                        clicked_time
+                    )
+
+                    show_keyword_detail(
+                        clicked_keyword
+                    )
+
+    # =========================
+    # 선택된 키워드
     # =========================
 
     selected_rows = grid_response.get(
@@ -914,33 +1534,920 @@ if st.session_state.saved_keywords:
 
         if len(selected_rows) > 0:
 
-            selected_keyword = selected_rows.iloc[0]["키워드"]
-
-            st.session_state.selected_keyword = (
-                selected_keyword
+            selected_keywords = (
+                selected_rows["키워드"].tolist()
             )
 
-            st.session_state.show_keyword_dialog = True
+        else:
+
+            selected_keywords = []
+
+    else:
+
+        selected_keywords = []
+
+    # =========================
+    # 선택 삭제
+    # =========================
+
+    if delete_button:
+
+        if selected_keywords:
+
+            delete_keywords(
+                selected_keywords
+            )
+
+            st.session_state.saved_keywords = (
+                load_saved_keywords()
+            )
+
+            st.success(
+                f"{len(selected_keywords)}개의 키워드를 삭제했습니다."
+            )
+
+            st.rerun()
+
+        else:
+
+            st.warning(
+                "삭제할 키워드를 선택해주세요."
+            )
+
+    # =========================
+    # 전체 업데이트
+    # =========================
+
+    if update_button:
+
+        update_all_keywords()
+
+        st.rerun()
 
 else:
 
     st.info(
-        "아직 저장된 키워드가 없습니다."
+        "저장된 키워드가 없습니다."
+    )
+
+
+
+
+# =========================
+# 블로그 작성 준비
+# =========================
+
+st.header("📝 블로그 작성 준비")
+
+
+saved_keywords = [
+    item["키워드"]
+    for item in st.session_state.saved_keywords
+]
+
+
+if saved_keywords:
+
+    selected_ai_keyword = st.selectbox(
+        "작성할 키워드를 선택하세요",
+        saved_keywords
+    )
+
+
+    # =========================
+    # 네이버 상위 블로그 제목 확인
+    # =========================
+
+    if st.button(
+        "🔎 네이버 상위 블로그 제목 확인",
+        use_container_width=True
+    ):
+
+        naver_titles = get_naver_blog_titles(
+            selected_ai_keyword
+        )
+
+
+        if naver_titles:
+
+            # 다른 버튼을 눌러도 유지되도록 저장
+            st.session_state.naver_blog_titles = (
+                naver_titles
+            )
+
+            # 현재 선택된 키워드도 저장
+            st.session_state.naver_blog_keyword = (
+                selected_ai_keyword
+            )
+
+        else:
+
+            st.warning(
+                "네이버 블로그 제목을 찾지 못했습니다."
+            )
+
+
+    # =========================
+    # 네이버 블로그 제목 표시
+    # =========================
+
+    if "naver_blog_titles" in st.session_state:
+
+        naver_titles = (
+            st.session_state.naver_blog_titles
+        )
+
+        naver_blog_keyword = (
+            st.session_state.get(
+                "naver_blog_keyword",
+                selected_ai_keyword
+            )
+        )
+
+
+        st.write("### 📱 네이버 블로그 제목")
+
+
+        for i, title in enumerate(
+            naver_titles,
+            1
+        ):
+
+            st.write(
+                f"{i}. {title}"
+            )
+
+
+        # =========================
+        # ChatGPT에 전달할 원본 자료
+        # =========================
+
+        chatgpt_text = f"""
+키워드: {naver_blog_keyword}
+
+아래는 네이버 모바일 검색에서 확인한
+상위 블로그 제목입니다.
+
+[네이버 블로그 제목]
+
+"""
+
+
+        for i, title in enumerate(
+            naver_titles,
+            1
+        ):
+
+            chatgpt_text += (
+                f"{i}. {title}\n"
+            )
+
+
+        # =========================
+        # 복사용 텍스트
+        # =========================
+
+        st.write("### 📋 ChatGPT에 전달할 자료")
+
+
+        st.code(
+            chatgpt_text,
+            language=None
+        )
+
+
+        st.info(
+            "위 내용을 복사해서 ChatGPT 블로그 프로젝트에 "
+            "붙여넣어 제목 선정과 글 작성을 진행하세요."
+        )
+
+
+else:
+
+    st.info(
+        "먼저 키워드 분석에서 키워드를 저장해주세요."
     )
 
 # =========================
-# AI 블로그 작성
+# 이미지 검색
 # =========================
 
+st.header("📷 이미지 검색")
 
 
-st.divider()
-
-st.header(
-    "✍️ AI 블로그 작성"
+image_queries_text = st.text_area(
+    "이미지 검색어를 입력하세요",
+    placeholder=(
+        "예:\n"
+        "심근경색 심장 혈관 막힘\n"
+        "심근경색 가슴 통증\n"
+        "관상동맥 심장 구조\n"
+        "심근경색 응급상황\n"
+        "심근경색 예방 생활습관\n"
+        "심혈관 건강 식단"
+    ),
+    height=180
 )
+
+
+# =========================
+# Google 이미지 검색 함수
+# =========================
+
+def search_google_images(query, num_results=6):
+
+    url = "https://serpapi.com/search.json"
+
+    params = {
+        "engine": "google_images",
+        "q": query,
+        "api_key": SERPAPI_KEY,
+        "ijn": "0"
+    }
+
+    try:
+
+        response = requests.get(
+            url,
+            params=params,
+            timeout=15
+        )
+
+        if response.status_code != 200:
+
+            print(
+                "SerpApi 오류:",
+                response.status_code,
+                response.text
+            )
+
+            return []
+
+        data = response.json()
+
+        return data.get(
+            "images_results",
+            []
+        )[:num_results]
+
+    except Exception as e:
+
+        print(
+            "이미지 검색 오류:",
+            e
+        )
+
+        return []
+
+
+# =========================
+# 세션 상태
+# =========================
+
+if "image_queries" not in st.session_state:
+
+    st.session_state.image_queries = []
+
+
+if "image_results" not in st.session_state:
+
+    st.session_state.image_results = {}
+
+
+if "selected_images" not in st.session_state:
+
+    st.session_state.selected_images = []
+
+
+# =========================
+# 이미지 검색
+# =========================
+
+if st.button(
+    "🔎 이미지 검색",
+    use_container_width=True
+):
+
+    image_queries = [
+        line.strip()
+        for line in image_queries_text.split("\n")
+        if line.strip()
+    ]
+
+
+    if not image_queries:
+
+        st.warning(
+            "이미지 검색어를 입력해주세요."
+        )
+
+
+    elif len(image_queries) > 6:
+
+        st.warning(
+            "이미지 검색어는 최대 6개까지 입력할 수 있습니다."
+        )
+
+
+    else:
+
+        # 새 검색이므로 기존 결과 초기화
+        st.session_state.image_queries = (
+            image_queries
+        )
+
+        st.session_state.image_results = {}
+
+        st.session_state.selected_images = []
+
+
+        progress = st.progress(0)
+
+        status_text = st.empty()
+
+        total_queries = len(
+            image_queries
+        )
+
+
+        # -------------------------
+        # SerpApi 실제 검색
+        # -------------------------
+
+        for index, query in enumerate(
+            image_queries
+        ):
+
+            status_text.write(
+                f"🔎 이미지 검색 중: {query}"
+            )
+
+
+            results = search_google_images(
+                query,
+                num_results=6
+            )
+
+
+            # 검색 결과 저장
+            st.session_state.image_results[
+                query
+            ] = results
+
+
+            progress.progress(
+                (index + 1) /
+                total_queries
+            )
+
+
+        progress.empty()
+
+
+        status_text.success(
+            f"✅ {total_queries}개 검색어의 이미지 검색이 완료되었습니다."
+        )
+
+
+# =========================
+# 검색 결과 표시
+# =========================
+#
+# 중요:
+# 여기서는 "선택"만 한다.
+# 편집 코드는 이 아래에 있다.
+# =========================
+
+if st.session_state.image_results:
+
+    st.write("### 🖼️ 이미지 선택")
+
+    st.caption(
+        "사용할 이미지를 최대 6개까지 선택해주세요."
+    )
+
+
+    for query_index, query in enumerate(
+        st.session_state.image_queries
+    ):
+
+        results = (
+            st.session_state
+            .image_results
+            .get(query, [])
+        )
+
+
+        if not results:
+
+            st.warning(
+                f"'{query}' 검색 결과가 없습니다."
+            )
+
+            continue
+
+
+        st.write(
+            f"#### 🔎 {query}"
+        )
+
+
+        # =========================
+        # 검색 결과 이미지
+        # =========================
+
+        cols = st.columns(6)
+
+
+        for image_index, image in enumerate(
+            results[:6]
+        ):
+
+            with cols[image_index]:
+
+                thumbnail = image.get(
+                    "thumbnail"
+                )
+
+
+                if thumbnail:
+
+                    st.image(
+                        thumbnail,
+                        use_container_width=True
+                    )
+
+
+                title = image.get(
+                    "title",
+                    "제목 없음"
+                )
+
+
+                # -------------------------
+                # 이미지 고유 ID
+                # -------------------------
+
+                image_id = (
+                    f"{query_index}_"
+                    f"{image_index}"
+                )
+
+
+                # -------------------------
+                # 현재 선택 여부
+                # -------------------------
+
+                is_selected = any(
+                    item["id"] == image_id
+                    for item
+                    in st.session_state.selected_images
+                )
+
+
+                checked = st.checkbox(
+                    "선택",
+                    value=is_selected,
+                    key=f"select_{image_id}"
+                )
+
+
+                # -------------------------
+                # 이미지 선택
+                # -------------------------
+
+                if checked and not is_selected:
+
+                    # 최대 6개
+                    if len(
+                        st.session_state.selected_images
+                    ) >= 6:
+
+                        st.warning(
+                            "이미지는 최대 6개까지 선택할 수 있습니다."
+                        )
+
+                    else:
+
+                        st.session_state.selected_images.append({
+
+                            "id": image_id,
+
+                            "query": query,
+
+                            "title": title,
+
+                            "thumbnail": thumbnail,
+
+                            "original": image.get(
+                                "original",
+                                ""
+                            ),
+
+                            "link": image.get(
+                                "link",
+                                ""
+                            )
+                        })
+
+
+                # -------------------------
+                # 선택 해제
+                # -------------------------
+
+                elif (
+                    not checked
+                    and is_selected
+                ):
+
+                    st.session_state.selected_images = [
+
+                        item
+
+                        for item
+                        in st.session_state.selected_images
+
+                        if item["id"] != image_id
+                    ]
+
+
+        st.divider()
+
+
+# =========================================================
+# 여기까지가 "이미지 선택"
+#
+# 아래부터는 검색 결과가 모두 끝난 뒤 나오는
+# "선택한 이미지 편집"
+# =========================================================
+
+
+selected_count = len(
+    st.session_state.selected_images
+)
+
 
 st.write(
-    "키워드를 선택하면 제목 추천과 "
-    "AI 초안 작성을 시작합니다."
+    f"### ✂️ 선택한 이미지 편집 ({selected_count}개)"
 )
+
+
+if selected_count == 0:
+
+    st.info(
+        "위의 검색 결과에서 이미지를 선택해주세요."
+    )
+
+
+else:
+
+    edited_images = []
+
+
+    # =========================
+    # 선택된 이미지 편집
+    # =========================
+
+    for image_index, selected_image in enumerate(
+        st.session_state.selected_images
+    ):
+
+        st.write(
+            f"#### 🖼️ 이미지 {image_index + 1}"
+        )
+
+
+        image_url = selected_image.get(
+            "original"
+        )
+
+
+        if not image_url:
+
+            image_url = selected_image.get(
+                "thumbnail"
+            )
+
+
+        try:
+
+            # =========================
+            # 원본 이미지 가져오기
+            # =========================
+
+            response = requests.get(
+                image_url,
+                timeout=15,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 "
+                        "(Macintosh; Intel Mac OS X 10_15_7) "
+                        "AppleWebKit/537.36 "
+                        "(KHTML, like Gecko) "
+                        "Chrome/140.0 Safari/537.36"
+                    )
+                }
+            )
+
+
+            response.raise_for_status()
+
+
+            original_image = Image.open(
+                BytesIO(
+                    response.content
+                )
+            ).convert("RGB")
+
+
+            # =========================
+            # 원본 크기
+            # =========================
+
+            st.caption(
+                f"원본 크기: "
+                f"{original_image.width} × "
+                f"{original_image.height}px"
+            )
+
+
+            # =========================
+            # 940 × 520 비율
+            # =========================
+
+            target_ratio = 940 / 520
+
+
+            original_ratio = (
+                original_image.width /
+                original_image.height
+            )
+
+
+            if original_ratio > target_ratio:
+
+                crop_height = (
+                    original_image.height
+                )
+
+                crop_width = int(
+                    crop_height *
+                    target_ratio
+                )
+
+
+            else:
+
+                crop_width = (
+                    original_image.width
+                )
+
+                crop_height = int(
+                    crop_width /
+                    target_ratio
+                )
+
+
+            # =========================
+            # 이동 가능한 범위
+            # =========================
+
+            max_left = (
+                original_image.width -
+                crop_width
+            )
+
+
+            max_top = (
+                original_image.height -
+                crop_height
+            )
+
+
+            # =========================
+            # 이미지 + 조절 영역
+            # =========================
+
+            image_col, control_col = st.columns(
+                [1.15, 1]
+            )
+
+
+            # =========================
+            # 위치 및 밝기 조절
+            # =========================
+
+            with control_col:
+
+                st.write("**✂️ 이미지 조절**")
+
+
+                # -------------------------
+                # 가로 위치
+                # -------------------------
+
+                if max_left > 0:
+
+                    horizontal_position = st.slider(
+                        "↔️ 가로 위치",
+                        0,
+                        max_left,
+                        max_left // 2,
+                        key=f"h_{image_index}"
+                    )
+
+                else:
+
+                    horizontal_position = 0
+
+
+                # -------------------------
+                # 세로 위치
+                # -------------------------
+
+                if max_top > 0:
+
+                    vertical_position = st.slider(
+                        "↕️ 세로 위치",
+                        0,
+                        max_top,
+                        max_top // 2,
+                        key=f"v_{image_index}"
+                    )
+
+                else:
+
+                    vertical_position = 0
+
+
+                # -------------------------
+                # 밝기
+                # -------------------------
+
+                brightness = st.slider(
+                    "☀️ 밝기",
+                    min_value=1.00,
+                    max_value=1.20,
+                    value=1.08,
+                    step=0.01,
+                    key=f"brightness_{image_index}"
+                )
+
+
+                st.caption(
+                    "최종 저장 크기: 940 × 520"
+                )
+
+
+            # =========================
+            # 크롭
+            # =========================
+
+            cropped_image = original_image.crop(
+                (
+                    horizontal_position,
+                    vertical_position,
+                    horizontal_position + crop_width,
+                    vertical_position + crop_height
+                )
+            )
+
+
+            # =========================
+            # 940 × 520 리사이즈
+            # =========================
+
+            edited_image = cropped_image.resize(
+                (940, 520),
+                Image.Resampling.LANCZOS
+            )
+
+
+            # =========================
+            # 밝기 적용
+            # =========================
+
+            edited_image = (
+                ImageEnhance.Brightness(
+                    edited_image
+                ).enhance(brightness)
+            )
+
+
+            # =========================
+            # 미리보기
+            # =========================
+
+            with image_col:
+
+                st.image(
+                    edited_image,
+                    caption="940 × 520",
+                    width=420
+                )
+
+
+            # =========================
+            # JPEG 생성
+            # =========================
+
+            output = BytesIO()
+
+
+            edited_image.save(
+                output,
+                format="JPEG",
+                quality=95,
+                optimize=True
+            )
+
+
+            output.seek(0)
+
+
+            edited_images.append({
+                "index": image_index + 1,
+                "data": output.getvalue()
+            })
+
+
+        except Exception as e:
+
+            st.error(
+                f"이미지 {image_index + 1} "
+                f"처리 오류: {e}"
+            )
+
+
+        st.divider()
+
+
+    # =========================
+    # ZIP 다운로드
+    # =========================
+
+    if edited_images:
+
+        # -------------------------
+        # 키워드 파일명 정리
+        # -------------------------
+
+        safe_keyword = "".join(
+            c
+            for c in selected_ai_keyword
+            if c not in r'\/:*?"<>|'
+        ).strip()
+
+
+        # -------------------------
+        # ZIP 생성
+        # -------------------------
+
+        zip_buffer = BytesIO()
+
+
+        with zipfile.ZipFile(
+            zip_buffer,
+            "w",
+            zipfile.ZIP_DEFLATED
+        ) as zip_file:
+
+            for image in edited_images:
+
+                filename = (
+                    f"{safe_keyword}_"
+                    f"{image['index']:02d}.jpg"
+                )
+
+
+                zip_file.writestr(
+                    filename,
+                    image["data"]
+                )
+
+
+        zip_buffer.seek(0)
+
+
+        # =========================
+        # 다운로드
+        # =========================
+
+        st.write(
+            f"### 📦 편집 완료 "
+            f"({len(edited_images)}개)"
+        )
+
+
+        st.download_button(
+            label=(
+                f"⬇️ {len(edited_images)}개 "
+                f"이미지 한 번에 다운로드"
+            ),
+            data=zip_buffer.getvalue(),
+            file_name=(
+                f"{safe_keyword}_이미지.zip"
+            ),
+            mime="application/zip",
+            use_container_width=True
+        )
