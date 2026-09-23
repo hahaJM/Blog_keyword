@@ -7,6 +7,7 @@ import requests
 import sqlite3
 import pandas as pd
 import streamlit.components.v1 as components
+from pathlib import Path
 from bs4 import BeautifulSoup
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 from urllib.parse import quote
@@ -747,6 +748,25 @@ st.set_page_config(
     page_icon="📝",
     layout="wide"
 )
+
+# =========================
+# BlogPilot 대표 배너
+# =========================
+
+banner_path = (
+    Path(__file__).parent
+    / "assets"
+    / "blogpilot_banner.png"
+)
+
+if banner_path.exists():
+
+    st.image(
+        str(banner_path),
+        use_container_width=True
+    )
+
+st.write("")
 
 st.session_state.saved_keywords = load_saved_keywords()
 
