@@ -1721,12 +1721,12 @@ if saved_keywords:
             1
         ):
 
-            chatgpt_text += (
+            AI_text += (
                 f"{i}. {title}\n"
             )
 
 
-        chatgpt_text += """
+        AI_text += """
 
         위 검색 결과를 참고해서 아래 순서대로 작업해줘.
 
@@ -1881,13 +1881,13 @@ if saved_keywords:
 
 
         st.code(
-            chatgpt_text,
+            AI_text,
             language=None
         )
 
 
         st.info(
-            "위 내용을 복사해서 ChatGPT 블로그 프로젝트에 "
+            "위 내용을 복사해서 AI 블로그 프로젝트에 "
             "붙여넣으세요. 제목 선정 → 글 작성 → 이미지 검색어 6개 "
             "생성까지 이어서 진행할 수 있습니다."
         )
