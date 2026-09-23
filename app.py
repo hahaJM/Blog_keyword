@@ -1877,7 +1877,7 @@ if saved_keywords:
         # 화면 표시
         # =========================
 
-        st.write("### 📋 ChatGPT에 전달할 자료")
+        st.write("### 📋 Ai에 전달할 자료")
 
 
         st.code(
@@ -1944,28 +1944,43 @@ def search_google_images(query, num_results=6):
             timeout=15
         )
 
+        # HTTP 오류
         if response.status_code != 200:
 
-            print(
-                "SerpApi 오류:",
-                response.status_code,
-                response.text
+            st.error(
+                f"SerpApi 오류 ({response.status_code})\n\n"
+                f"검색어: {query}\n\n"
+                f"{response.text[:500]}"
             )
 
             return []
 
         data = response.json()
 
-        return data.get(
+        # SerpApi 자체 오류 확인
+        if data.get("error"):
+
+            st.error(
+                f"SerpApi 검색 오류\n\n"
+                f"검색어: {query}\n\n"
+                f"{data.get('error')}"
+            )
+
+            return []
+
+        results = data.get(
             "images_results",
             []
-        )[:num_results]
+        )
+
+        return results[:num_results]
 
     except Exception as e:
 
-        print(
-            "이미지 검색 오류:",
-            e
+        st.error(
+            f"이미지 검색 중 오류가 발생했습니다.\n\n"
+            f"검색어: {query}\n\n"
+            f"{e}"
         )
 
         return []
