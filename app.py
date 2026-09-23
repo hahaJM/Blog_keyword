@@ -1877,19 +1877,52 @@ if saved_keywords:
         # 화면 표시
         # =========================
 
-        st.write("### 📋 Ai에 전달할 자료")
+        st.write("### 🤖 AI 글 작성")
 
-
-        st.code(
-            AI_text,
-            language=None
+        st.caption(
+            f"키워드: {naver_blog_keyword}"
         )
 
+        st.caption(
+            f"네이버 상위 블로그 제목 {len(naver_titles)}개 확인됨"
+        )
 
-        st.info(
-            "위 내용을 복사해서 AI 블로그 프로젝트에 "
-            "붙여넣으세요. 제목 선정 → 글 작성 → 이미지 검색어 6개 "
-            "생성까지 이어서 진행할 수 있습니다."
+        import streamlit.components.v1 as components
+
+        copy_button_html = f"""
+        <script>
+        function copyText() {{
+            const text = {AI_text!r};
+
+            navigator.clipboard.writeText(text).then(function() {{
+                document.getElementById("copy-status").innerText =
+                    "✅ 복사되었습니다. AI 블로그 프로젝트에 붙여넣으세요.";
+            }});
+        }}
+        </script>
+
+        <button
+            onclick="copyText()"
+            style="
+                width:100%;
+                padding:12px;
+                font-size:16px;
+                font-weight:600;
+                border-radius:8px;
+                border:1px solid #cccccc;
+                background:#ffffff;
+                cursor:pointer;
+            "
+        >
+            📋 AI에 전달할 자료 복사
+        </button>
+
+        <p id="copy-status" style="margin-top:8px;"></p>
+        """
+
+        components.html(
+            copy_button_html,
+            height=100
         )
 
 
