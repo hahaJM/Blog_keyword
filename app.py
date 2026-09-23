@@ -1893,23 +1893,23 @@ if saved_keywords:
         )
 
 
-    # =========================
-    # 복사용 텍스트
-    # =========================
+        # =========================
+        # 복사용 텍스트
+        # =========================
 
-    st.write("### 📋 ChatGPT에 전달할 자료")
-
-
-    st.code(
-        chatgpt_text,
-        language=None
-    )
+        st.write("### 📋 ChatGPT에 전달할 자료")
 
 
-    st.info(
-        "위 내용을 복사해서 ChatGPT 블로그 프로젝트에 "
-        "붙여넣어 제목 선정과 글 작성을 진행하세요."
-    )
+        st.code(
+            chatgpt_text,
+            language=None
+        )
+
+
+        st.info(
+            "위 내용을 복사해서 ChatGPT 블로그 프로젝트에 "
+            "붙여넣어 제목 선정과 글 작성을 진행하세요."
+        )
 
 
 else:
