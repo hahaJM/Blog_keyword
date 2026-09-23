@@ -7,11 +7,9 @@ import requests
 import sqlite3
 import pandas as pd
 import streamlit.components.v1 as components
-from openai import OpenAI
 from bs4 import BeautifulSoup
 from st_aggrid import AgGrid, GridOptionsBuilder, JsCode
 from urllib.parse import quote
-from google import genai
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 from PIL import Image, ImageEnhance
 from io import BytesIO
