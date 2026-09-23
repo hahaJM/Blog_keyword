@@ -172,8 +172,7 @@ DB_NAME = "blogpilot.db"
 
 
 def init_database():
-    
-    
+
     conn = sqlite3.connect(DB_NAME)
 
     cursor = conn.cursor()
@@ -192,14 +191,15 @@ def init_database():
     """)
 
     cursor.execute("""
-    CREATE TABLE IF NOT EXISTS keyword_history (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        keyword TEXT,
-        monthly_volume INTEGER,
-        recorded_at TEXT
-    )
-""")
+        CREATE TABLE IF NOT EXISTS keyword_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            keyword TEXT,
+            monthly_volume INTEGER,
+            recorded_at TEXT
+        )
+    """)
 
+    # 기존 DB에 PC 검색량 컬럼 추가
     try:
         cursor.execute(
             "ALTER TABLE saved_keywords ADD COLUMN pc_volume INTEGER DEFAULT 0"
@@ -207,6 +207,7 @@ def init_database():
     except sqlite3.OperationalError:
         pass
 
+    # 기존 DB에 모바일 검색량 컬럼 추가
     try:
         cursor.execute(
             "ALTER TABLE saved_keywords ADD COLUMN mobile_volume INTEGER DEFAULT 0"
@@ -214,6 +215,7 @@ def init_database():
     except sqlite3.OperationalError:
         pass
 
+    # 기존 DB에 PC 클릭률 컬럼 추가
     try:
         cursor.execute(
             "ALTER TABLE saved_keywords ADD COLUMN pc_ctr REAL DEFAULT 0"
@@ -221,16 +223,15 @@ def init_database():
     except sqlite3.OperationalError:
         pass
 
+    # 기존 DB에 모바일 클릭률 컬럼 추가
     try:
         cursor.execute(
             "ALTER TABLE saved_keywords ADD COLUMN mobile_ctr REAL DEFAULT 0"
         )
     except sqlite3.OperationalError:
         pass
-        # 기존 DB에 새 컬럼 추가
 
-     
-    # 블로그 영역 위치     
+    # 기존 DB에 블로그 영역 위치 컬럼 추가
     try:
         cursor.execute("""
             ALTER TABLE saved_keywords
@@ -239,9 +240,17 @@ def init_database():
     except sqlite3.OperationalError:
         pass
 
+    # 기존 DB에 작업 완료 여부 컬럼 추가
+    try:
+        cursor.execute("""
+            ALTER TABLE saved_keywords
+            ADD COLUMN completed INTEGER DEFAULT 0
+        """)
+    except sqlite3.OperationalError:
+        pass
+
     conn.commit()
     conn.close()
-
 
 init_database()
 
@@ -296,7 +305,8 @@ def load_saved_keywords():
             mobile_volume,
             pc_ctr,
             mobile_ctr,
-            blog_position
+            blog_position,
+            completed
         FROM saved_keywords
         ORDER BY id DESC
     """)
@@ -307,7 +317,7 @@ def load_saved_keywords():
 
     keywords = []
 
-    for keyword, monthly_volume, competition, pc_volume, mobile_volume, pc_ctr, mobile_ctr, blog_position in results:
+    for keyword, monthly_volume, competition, pc_volume, mobile_volume, pc_ctr, mobile_ctr, blog_position, completed in results:
 
         keywords.append({
             "키워드": keyword,
@@ -317,10 +327,28 @@ def load_saved_keywords():
             "모바일 검색량": mobile_volume,
             "PC 클릭률": pc_ctr,
             "모바일 클릭률": mobile_ctr,
-            "블로그 노출 위치": blog_position
+            "블로그 노출 위치": blog_position,
+            "작업 완료": bool(completed)
         })
 
     return keywords
+
+def mark_keyword_completed(keyword):
+    conn = sqlite3.connect(DB_NAME)
+
+    cursor = conn.cursor()
+
+    cursor.execute(
+        """
+        UPDATE saved_keywords
+        SET completed = 1
+        WHERE keyword = ?
+        """,
+        (keyword,)
+    )
+
+    conn.commit()
+    conn.close()
 
 def save_keyword_history(keyword, monthly_volume):
 
@@ -1312,9 +1340,11 @@ if st.session_state.saved_keywords:
             "월간 검색량": item["월간 검색량"],
             "PC 검색량": item["PC 검색량"],
             "모바일 검색량": item["모바일 검색량"],
-            "블로그 위치": item.get(
-                "블로그 노출 위치",
-                "-"
+            "블로그 노출 위치": item["블로그 노출 위치"],
+            "상태": (
+                "🟢 작업 완료"
+                if item["작업 완료"]
+                else "⚪ 미작성"
             )
         })
 
@@ -2709,5 +2739,7 @@ else:
                 f"{safe_keyword}_이미지.zip"
             ),
             mime="application/zip",
-            use_container_width=True
+            use_container_width=True,
+            on_click=mark_keyword_completed,
+            args=(selected_ai_keyword,)
         )
