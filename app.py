@@ -2018,11 +2018,52 @@ if st.button(
     use_container_width=True
 ):
 
-    image_queries = [
-        line.strip()
-        for line in image_queries_text.split("\n")
-        if line.strip()
-    ]
+    # =========================
+    # 이미지 검색어 정리
+    # =========================
+
+    import re
+
+
+    image_queries = []
+
+    for line in image_queries_text.split("\n"):
+
+        line = line.strip()
+
+        if not line:
+            continue
+
+        # -------------------------
+        # 앞의 번호 제거
+        # 예:
+        # 1. headache patient
+        # 2) stroke symptoms
+        # 3. "brain illustration"
+        # -------------------------
+
+        line = re.sub(
+            r"^\d+[\.\)]\s*",
+            "",
+            line
+        )
+
+        # -------------------------
+        # 앞뒤 따옴표 제거
+        # -------------------------
+
+        line = line.strip(
+            "\"'“”‘’"
+        )
+
+        # -------------------------
+        # 다시 공백 정리
+        # -------------------------
+
+        line = line.strip()
+
+        if line:
+            image_queries.append(line)
 
 
     if not image_queries:
